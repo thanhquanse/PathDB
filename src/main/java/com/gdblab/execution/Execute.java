@@ -1,7 +1,11 @@
 package com.gdblab.execution;
 
+import java.io.BufferedReader;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.ServerSocket;
+import java.net.Socket;
 
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
@@ -20,7 +24,6 @@ import com.gdblab.algebra.parser.RPQErrorListener;
 import com.gdblab.algebra.parser.RPQExpression;
 import com.gdblab.algebra.parser.RPQGrammarListener;
 import com.gdblab.algebra.parser.error.SyntaxErrorException;
-import com.gdblab.algebra.parser.error.VariableNotFoundException;
 import com.gdblab.algebra.parser.impl.RPQtoAlgebraVisitor;
 import com.gdblab.algebra.queryplan.logical.LogicalOperator;
 import com.gdblab.algebra.queryplan.logical.impl.LogicalOpSelection;
@@ -28,14 +31,12 @@ import com.gdblab.algebra.queryplan.logical.visitor.LogicalToBFPhysicalVisitor;
 import com.gdblab.algebra.queryplan.logical.visitor.PredicatePushdownLogicalPlanVisitor;
 import com.gdblab.algebra.queryplan.physical.PhysicalOperator;
 import com.gdblab.algebra.queryplan.util.Utils;
-import com.gdblab.graph.Graph;
-import com.gdblab.graph.schema.Edge;
 import com.gdlab.parser.RPQGrammarLexer;
 import com.gdlab.parser.RPQGrammarParser;
 
 public final class Execute {
 
-    public static void EvalRPQWithAlgebra() {
+    public static String EvalRPQWithAlgebra() {
         long start = System.nanoTime();
         int counter = 1;
 
@@ -70,22 +71,23 @@ public final class Execute {
             counter = Utils.printAndCountPaths(po);
 
             long end = System.nanoTime();
-            System.out.println("\nTotal paths: " + (counter - 1) + " paths");
-            System.out.println("Execution time: " + Utils.getTime(start, end) + " seconds");
-            System.out.println("");
+            // System.out.println("\nTotal paths: " + (counter - 1) + " paths");
+            // System.out.println("Execution time: " + Utils.getTime(start, end) + " seconds");
+            // System.out.println("");
 
+            String cq = Context.getInstance().getCompleteQuery();
             Tools.resetContext();
-            // return Context.getInstance().getCompleteQuery() + Utils.getTime(start, end);
+            return cq + Utils.getTime(start, end);
         } catch (SyntaxErrorException | RecognitionException syntaxError) {
             Tools.resetContext();
-            System.out.println(syntaxError.toString());
-            // return Context.getInstance().getCompleteQuery() + "999.999";
+            // System.out.println(syntaxError.toString());
+            return Context.getInstance().getCompleteQuery() + "999.999";
         } catch (OutOfMemoryError e) {
             emergencyMemory = null;
             System.gc();
             Tools.resetContext();
-            System.out.println("Out of memory error. Try again with more memory.\n");
-            // return Context.getInstance().getCompleteQuery() + "999.999";
+            // System.out.println("Out of memory error. Try again with more memory.\n");
+            return Context.getInstance().getCompleteQuery() + "999.999";
         }
     }
 
@@ -109,50 +111,50 @@ public final class Execute {
 
             String prompt = "PathDB> ";
 
-            // ServerSocket ss = new ServerSocket(12000);
-            // System.out.println("Server started on port 12000. Waiting for client connections...");
-            // while (true) {
-            //     try (Socket clientSocket = ss.accept(); BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream())); PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)) {
-            //         String input = in.readLine();
-            //         System.out.println("Received: " + input);
-            //         Context.getInstance().setCompleteQuery(input);
-            //         String res = EvalRPQWithAlgebra();
-            //         out.println(res);
-            //     }
-            // }
+            ServerSocket ss = new ServerSocket(12000);
+            System.out.println("Server started on port 12000. Waiting for client connections...");
             while (true) {
-                String line = reader.readLine(prompt);
-                reader.getHistory().add(line);
-                if (line.equalsIgnoreCase("/h") || line.equalsIgnoreCase("/help")) {
-                    Tools.showHelp();
-                    System.out.println();
-                } else if (line.equalsIgnoreCase("/in") || line.equalsIgnoreCase("/information")) {
-                    Tools.showInformation();
-                } else if (line.equalsIgnoreCase("/la") || line.equalsIgnoreCase("/labels")) {
-                    System.out.println("Samples: ");
-                    ArrayList<Edge> edges = Graph.getGraph().getSampleOfEachlabel();
-                    for (Edge e : edges) {
-                        System.out.println(e.getId() + ": " + e.getSource().getId() + "," + e.getLabel() + "," + e.getTarget().getId());
-                    }
-                    System.out.println("");
-                } else if (line.equalsIgnoreCase("/q") || line.equalsIgnoreCase("/quit")) {
-                    System.out.println("Exiting...");
-                    System.exit(0);
-                } else if (line.endsWith(";")) {
-                    try {
-                        Context.getInstance().setCompleteQuery(line);
-                        EvalRPQWithAlgebra();
-                    } catch (OutOfMemoryError e) {
-                        System.out.println("Out of memory error. Try again with more memory.\n");
-                    } catch (VariableNotFoundException e) {
-                        System.out.println(e.toString());
-                    } catch (Exception e) {
-                        System.out.println(e);
-                    }
-                } else {
-                    System.out.println("Invalid command. Type /h or /help for help.\n");
+                try (Socket clientSocket = ss.accept(); BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream())); PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)) {
+                    String input = in.readLine();
+                    System.out.println("Received: " + input);
+                    Context.getInstance().setCompleteQuery(input);
+                    String res = EvalRPQWithAlgebra();
+                    out.println(res);
                 }
             }
+            // while (true) {
+            //     String line = reader.readLine(prompt);
+            //     reader.getHistory().add(line);
+            //     if (line.equalsIgnoreCase("/h") || line.equalsIgnoreCase("/help")) {
+            //         Tools.showHelp();
+            //         System.out.println();
+            //     } else if (line.equalsIgnoreCase("/in") || line.equalsIgnoreCase("/information")) {
+            //         Tools.showInformation();
+            //     } else if (line.equalsIgnoreCase("/la") || line.equalsIgnoreCase("/labels")) {
+            //         System.out.println("Samples: ");
+            //         ArrayList<Edge> edges = Graph.getGraph().getSampleOfEachlabel();
+            //         for (Edge e : edges) {
+            //             System.out.println(e.getId() + ": " + e.getSource().getId() + "," + e.getLabel() + "," + e.getTarget().getId());
+            //         }
+            //         System.out.println("");
+            //     } else if (line.equalsIgnoreCase("/q") || line.equalsIgnoreCase("/quit")) {
+            //         System.out.println("Exiting...");
+            //         System.exit(0);
+            //     } else if (line.endsWith(";")) {
+            //         try {
+            //             Context.getInstance().setCompleteQuery(line);
+            //             EvalRPQWithAlgebra();
+            //         } catch (OutOfMemoryError e) {
+            //             System.out.println("Out of memory error. Try again with more memory.\n");
+            //         } catch (VariableNotFoundException e) {
+            //             System.out.println(e.toString());
+            //         } catch (Exception e) {
+            //             System.out.println(e);
+            //         }
+            //     } else {
+            //         System.out.println("Invalid command. Type /h or /help for help.\n");
+            //     }
+            // }
         } catch (IOException e) {
             System.out.println(e.toString());
         } catch (UserInterruptException e) {

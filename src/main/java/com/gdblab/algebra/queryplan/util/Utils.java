@@ -5,15 +5,10 @@ import java.util.Iterator;
 import java.util.List;
 
 import com.gdblab.algebra.queryplan.physical.PhysicalOperator;
-import com.gdblab.algebra.returncontent.ReturnContent;
 import com.gdblab.execution.Context;
 import com.gdblab.graph.schema.Edge;
 import com.gdblab.graph.schema.Node;
 import com.gdblab.graph.schema.Path;
-
-import de.vandermeer.asciitable.AsciiTable;
-import de.vandermeer.asciitable.CWC_FixedWidth;
-import de.vandermeer.skb.interfaces.transformers.textformat.TextAlignment;
 
 public class Utils {
 
@@ -87,41 +82,41 @@ public class Utils {
     public static int printAndCountPaths(PhysicalOperator po) {
         Integer counterLP = 1;
 
-        ArrayList<ReturnContent> returnContentList = Context.getInstance().getReturnedVariables();
+        // ArrayList<ReturnContent> returnContentList = Context.getInstance().getReturnedVariables();
         Integer limitCalculatePaths = Context.getInstance().getLimit();
 
-        AsciiTable table = new AsciiTable();
-        List<String> columnNames = returnContentList.stream()
-                .map(ReturnContent::getReturnName)
-                .toList();
-        ArrayList<String> columnNamesWithLength = new ArrayList<>(columnNames);
-        columnNamesWithLength.add(0, "#");
-        CWC_FixedWidth cwc = new CWC_FixedWidth();
-        cwc.add(10);
-        for (int i = 0; i < columnNames.size(); i++) {
-            cwc.add(30);
-        }
-        table.getRenderer().setCWC(cwc);
-        table.addRule();
-        table.addRow(columnNamesWithLength).setTextAlignment(TextAlignment.CENTER);
-        table.addRule();
+        // AsciiTable table = new AsciiTable();
+        // List<String> columnNames = returnContentList.stream()
+        //         .map(ReturnContent::getReturnName)
+        //         .toList();
+        // ArrayList<String> columnNamesWithLength = new ArrayList<>(columnNames);
+        // columnNamesWithLength.add(0, "#");
+        // CWC_FixedWidth cwc = new CWC_FixedWidth();
+        // cwc.add(10);
+        // for (int i = 0; i < columnNames.size(); i++) {
+        //     cwc.add(30);
+        // }
+        // table.getRenderer().setCWC(cwc);
+        // table.addRule();
+        // table.addRow(columnNamesWithLength).setTextAlignment(TextAlignment.CENTER);
+        // table.addRule();
         while (counterLP <= limitCalculatePaths && po.hasNext()) {
 
             Path p = po.next();
 
-            List<String> row = new ArrayList<>();
-            row.add(String.valueOf(counterLP));
-            for (ReturnContent returnContent : returnContentList) {
-                String content = returnContent.getContent(p);
-                row.add(content);
-            }
-            table.addRow(row).setTextAlignment(TextAlignment.CENTER);
-            table.addRule();
+            // List<String> row = new ArrayList<>();
+            // row.add(String.valueOf(counterLP));
+            // for (ReturnContent returnContent : returnContentList) {
+            //     String content = returnContent.getContent(p);
+            //     row.add(content);
+            // }
+            // table.addRow(row).setTextAlignment(TextAlignment.CENTER);
+            // table.addRule();
             counterLP++;
         }
 
-        System.out.println();
-        System.out.println(table.render());
+        // System.out.println();
+        // System.out.println(table.render());
         return counterLP;
     }
 

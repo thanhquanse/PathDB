@@ -25,8 +25,8 @@ public class PhysicalOpRecursiveOneList extends UnaryPhysicalOp {
 
     public PhysicalOpRecursiveOneList(final PhysicalOperator child, final LogicalOpRecursive lop) {
         super(child);
-        this.maxRecursion = Context.getInstance().getMaxRecursion();
         this.lop = lop;
+        this.maxRecursion = Context.getInstance().getMaxRecursion();
         this.currentRecursion = 0;
         this.indexStack.push(0);
         saveChildList(child);
@@ -87,9 +87,11 @@ public class PhysicalOpRecursiveOneList extends UnaryPhysicalOp {
 
         while (true) {
 
-            if (this.candidate.getEdgeLength() < this.maxRecursion) {
-
-                continue;
+            while (this.currentRecursion < this.maxRecursion) {
+                if (this.indexStack.size() == 1) {
+                    this.indexStack.push(0);
+                }
+                this.currentRecursion++;
             }
 
             return true;
