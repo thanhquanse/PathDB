@@ -30,16 +30,86 @@ import com.gdblab.algebra.queryplan.physical.PhysicalOperator;
 import com.gdblab.algebra.queryplan.util.Utils;
 import com.gdblab.graph.Graph;
 import com.gdblab.graph.schema.Edge;
+import com.gdblab.privacy.SelectiveDPRedactor;
+import com.gdblab.privacy.SensitivePatternPolicy;
 import com.gdlab.parser.RPQGrammarLexer;
 import com.gdlab.parser.RPQGrammarParser;
 
 public final class Execute {
+    // Built once the graph is loaded (see interactive()), reused for the whole REPL
+    // session so the privacy accountant composes across every /sdp query the user runs.
+    private static SelectiveDPRedactor sdpRedactor = null;
+
+    // EDGE-focused sensitivity policy (separate from sdpRedactor's attribute-key
+    // policy F) - configured live via /sdp-config. Persists across graph
+    // reloads (a /load doesn't reset which node names/statuses/edge labels the
+    // analyst has declared sensitive), unlike sdpRedactor which must be rebuilt
+    // per-graph since its domain index is graph-derived.
+    private static SensitivePatternPolicy sdpPattern = new SensitivePatternPolicy();
+
+    /** "/sdp-config [subcommand] [arg]" - configures sdpPattern, the
+     *  EDGE-focused sensitivity policy: an edge is sensitive if its own label is
+     *  flagged, or if either endpoint node matches a flagged id/name/status. Same
+     *  live-editable style as handleSdpSensitiveCommand, different policy object. */
+    private static void handleSdpSensitiveEdgeCommand(final String rest) {
+        String[] parts = rest.isEmpty() ? new String[0] : rest.split("\\s+", 2);
+        String sub = parts.length > 0 ? parts[0].toLowerCase() : "show";
+        String arg = parts.length > 1 ? parts[1].trim() : "";
+
+        switch (sub) {
+            case "show", "" -> {
+                System.out.println("Edge sensitivity pattern - current configuration:");
+                System.out.println("  sensitive node ids:     " + sdpPattern.getSensitiveNodeIds());
+                System.out.println("  sensitive node names:    " + sdpPattern.getSensitiveNodeNames());
+                System.out.println("  sensitive node statuses: " + sdpPattern.getSensitiveStatusValues());
+                System.out.println("  sensitive edge labels:   " + sdpPattern.getSensitiveEdgeLabels());
+                System.out.println("  an edge is sensitive if its own label is flagged, OR either endpoint node matches.\n");
+            }
+            case "add-node-name" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config add-node-name <name>\n"); }
+                else { sdpPattern.addSensitiveNodeName(arg); System.out.println("Added sensitive node name: " + arg + "\n"); }
+            }
+            case "remove-node-name" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config remove-node-name <name>\n"); }
+                else { sdpPattern.removeSensitiveNodeName(arg); System.out.println("Removed sensitive node name: " + arg + "\n"); }
+            }
+            case "add-node-id" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config add-node-id <id>\n"); }
+                else { sdpPattern.addSensitiveNodeId(arg); System.out.println("Added sensitive node id: " + arg + "\n"); }
+            }
+            case "remove-node-id" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config remove-node-id <id>\n"); }
+                else { sdpPattern.removeSensitiveNodeId(arg); System.out.println("Removed sensitive node id: " + arg + "\n"); }
+            }
+            case "add-status" -> {
+                String[] kv = arg.split("=", 2);
+                if (kv.length != 2) { System.out.println("Usage: /sdp-config add-status <propertyKey>=<value>\n"); }
+                else { sdpPattern.addSensitiveStatus(kv[0].trim(), kv[1].trim());
+                       System.out.println("Added sensitive status: " + kv[0].trim() + "=" + kv[1].trim() + "\n"); }
+            }
+            case "remove-status" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config remove-status <propertyKey>\n"); }
+                else { sdpPattern.removeSensitiveStatus(arg); System.out.println("Removed sensitive status key: " + arg + "\n"); }
+            }
+            case "add-edge-label" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config add-edge-label <label>\n"); }
+                else { sdpPattern.addSensitiveEdgeLabel(arg); System.out.println("Added sensitive edge label: " + arg + "\n"); }
+            }
+            case "remove-edge-label" -> {
+                if (arg.isEmpty()) { System.out.println("Usage: /sdp-config remove-edge-label <label>\n"); }
+                else { sdpPattern.removeSensitiveEdgeLabel(arg); System.out.println("Removed sensitive edge label: " + arg + "\n"); }
+            }
+            default -> System.out.println("Unknown /sdp-config subcommand: " + sub
+                    + "\nUsage: /sdp-config [show | add-node-name <n> | remove-node-name <n> | "
+                    + "add-node-id <id> | remove-node-id <id> | add-status <key>=<value> | remove-status <key> | "
+                    + "add-edge-label <label> | remove-edge-label <label>]\n");
+        }
+    }
 
     public static void EvalRPQWithAlgebra() {
         long start = System.nanoTime();
         int counter = 1;
 
-        byte[] emergencyMemory = new byte[1024 * 1024];
         PhysicalOperator po = null;
 
         try {
@@ -81,7 +151,6 @@ public final class Execute {
             System.out.println(syntaxError.toString());
             // return Context.getInstance().getCompleteQuery() + "999.999";
         } catch (OutOfMemoryError e) {
-            emergencyMemory = null;
             System.gc();
             Tools.resetContext();
             System.out.println("Out of memory error. Try again with more memory.\n");
@@ -107,6 +176,10 @@ public final class Execute {
                 Tools.loadCustomGraphFiles(args[0], args[1]);
             }
 
+            // Must be built AFTER the graph is loaded: its constructor scans the graph
+            // to index candidate values for the categorical (Exponential Mechanism) DP.
+            sdpRedactor = SelectiveDPRedactor.withDefaults();
+
             String prompt = "PathDB> ";
 
             // ServerSocket ss = new ServerSocket(12000);
@@ -125,6 +198,13 @@ public final class Execute {
                 reader.getHistory().add(line);
                 if (line.equalsIgnoreCase("/h") || line.equalsIgnoreCase("/help")) {
                     Tools.showHelp();
+                    System.out.println("                      Load a dataset, same flag style as the PathDB CLI. Rebuilds sdpRedactor.");
+                    System.out.println("  /sdp-config [show|add-node-name ..|add-status k=v|add-edge-label ..|...]");
+                    System.out.println("                      Inspect/edit the EDGE-focused sensitivity pattern (e.g. 'President'):");
+                    System.out.println("                      an edge is sensitive if either endpoint matches, or its own label does.");
+                    System.out.println("  /sdp-execute <query>;  Run the sensitive-EDGE-pattern operator-level benchmark (gradual");
+                    System.out.println("                      per-operator summing, then selective vs uniform DP) on the loaded");
+                    System.out.println("                      graph, for any query - see Evaluator.java.");
                     System.out.println();
                 } else if (line.equalsIgnoreCase("/in") || line.equalsIgnoreCase("/information")) {
                     Tools.showInformation();
@@ -135,9 +215,32 @@ public final class Execute {
                         System.out.println(e.getId() + ": " + e.getSource().getId() + "," + e.getLabel() + "," + e.getTarget().getId());
                     }
                     System.out.println("");
+                } else if (line.startsWith("/explain ")) {
+                    String q = line.substring("/explain ".length());
+                    Context.getInstance().setCompleteQuery(q);
+                    IntermediateResultsExplainer.explain(q, 20);
+                    Tools.resetContext();
                 } else if (line.equalsIgnoreCase("/q") || line.equalsIgnoreCase("/quit")) {
                     System.out.println("Exiting...");
                     System.exit(0);
+		        } else if (line.toLowerCase().startsWith("/sdp-config")) {
+                    handleSdpSensitiveEdgeCommand(line.substring("/sdp-config".length()).trim());
+                } else if (line.toLowerCase().startsWith("/sdp-execute ")) {
+                    // "/sdp-execute <query>;" - runs the sensitive-EDGE-pattern
+                    // operator-level benchmark against WHATEVER graph is currently
+                    // loaded (via /load) using sdpPattern (configured via
+                    // /sdp-config), for any query PathDB supports - no file
+                    // paths here, load the dataset separately with /load first.
+                    String q = line.substring("/sdp-execute ".length()).trim();
+                    if (q.isEmpty() || !q.endsWith(";")) {
+                        System.out.println("Usage: /sdp-execute <query>;  (load a dataset first with /load -n ... -e ...)\n");
+                    } else {
+                        try {
+                            Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 200);
+                        } catch (Exception e) {
+                            System.out.println(e);
+                        }
+                    }
                 } else if (line.endsWith(";")) {
                     try {
                         Context.getInstance().setCompleteQuery(line);

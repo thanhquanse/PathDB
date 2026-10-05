@@ -23,6 +23,21 @@ public final class Context {
     private String completeQuery;
     private ArrayList<ReturnContent> returnedVariables;
 
+    private String dpProtectedLabel = null;      // e.g. "knows"; null = DP disabled, behaves as upstream
+    private Condition dpSensitivityCondition = null;
+    private double dpEpsilon = 1.0;
+
+    public void setDpProtectedLabel(String label) { this.dpProtectedLabel = label; }
+    public String getDpProtectedLabel() { return dpProtectedLabel; }
+
+    public void setDpSensitivityCondition(Condition c) { this.dpSensitivityCondition = c; }
+    public Condition getDpSensitivityCondition() { return dpSensitivityCondition; }
+
+    public void setDpEpsilon(double epsilon) { this.dpEpsilon = epsilon; }
+    public double getDpEpsilon() { return dpEpsilon; }
+
+    public boolean isDpEnabled() { return dpProtectedLabel != null && dpSensitivityCondition != null; }
+
     private Context() {
         maxPathLength = 10;
         maxRecursion = 4;

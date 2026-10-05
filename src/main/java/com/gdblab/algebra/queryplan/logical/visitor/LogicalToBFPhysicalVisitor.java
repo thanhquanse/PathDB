@@ -14,7 +14,9 @@ import com.gdblab.algebra.queryplan.physical.impl.PhysicalOpHashNodeJoin;
 import com.gdblab.algebra.queryplan.physical.impl.PhysicalOpRecursive;
 import com.gdblab.algebra.queryplan.physical.impl.PhysicalOpReverse;
 import com.gdblab.algebra.queryplan.physical.impl.PhysicalOpSelectionByLabel;
+import com.gdblab.algebra.queryplan.physical.impl.PhysicalOpSelectionByLabelDP;
 import com.gdblab.algebra.queryplan.physical.impl.PhysicalOpSequentialScan;
+import com.gdblab.execution.Context;
 
 public class LogicalToBFPhysicalVisitor implements LogicalPlanVisitor {
 
@@ -111,7 +113,13 @@ public class LogicalToBFPhysicalVisitor implements LogicalPlanVisitor {
 
     @Override
     public void visit(LogicalOpSelectionByLabel logicalOpSelectionByLabel) {
-        stack.push(new PhysicalOpSelectionByLabel(logicalOpSelectionByLabel));
+        String label = ((com.gdblab.algebra.condition.Label) logicalOpSelectionByLabel.getCondition()).getLabel();
+        if (Context.getInstance().isDpEnabled() && label.equals(Context.getInstance().getDpProtectedLabel())) {
+            stack.push(new PhysicalOpSelectionByLabelDP(logicalOpSelectionByLabel,
+                    Context.getInstance().getDpSensitivityCondition(), Context.getInstance().getDpEpsilon()));
+        } else {
+            stack.push(new PhysicalOpSelectionByLabel(logicalOpSelectionByLabel));
+        }
     }
 
     public PhysicalPlan getPhysicalPlan() {

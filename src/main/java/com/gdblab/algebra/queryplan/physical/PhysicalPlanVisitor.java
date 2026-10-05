@@ -27,4 +27,6 @@ public interface PhysicalPlanVisitor {
     void visit(final PhysicalOpHashNodeJoinRight physicalOpHashNodeJoinRight);
 
     void visit(final PhysicalOpSelectionByLabel physicalOpSelection);
+
+    void visit(final PhysicalOpSelectionByLabelDP physicalOpSelectionByLabelDP);
 }

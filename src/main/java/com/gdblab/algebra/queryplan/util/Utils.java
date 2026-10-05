@@ -14,6 +14,7 @@ import com.gdblab.graph.schema.Path;
 import de.vandermeer.asciitable.AsciiTable;
 import de.vandermeer.asciitable.CWC_FixedWidth;
 import de.vandermeer.skb.interfaces.transformers.textformat.TextAlignment;
+import com.gdblab.algebra.condition.Condition;
 
 public class Utils {
 
@@ -123,6 +124,52 @@ public class Utils {
         System.out.println();
         System.out.println(table.render());
         return counterLP;
+    }
+
+     /**
+     * Drains a physical plan, releasing non-sensitive paths exactly and a noisy count of the rest.
+     * Works regardless of plan shape/depth: `condition` is evaluated against each COMPLETE result
+     * Path, the same way any WHERE-clause condition already is elsewhere in PathDB.
+     */
+    public static int printAndCountPathsDP(final PhysicalOperator po, final Condition condition, double epsilon) {
+        int counter = 1;
+        long sensitiveCount = 0;
+        while (po.hasNext()) {
+            Path p = po.next();
+            if (condition.eval(p)) {
+                sensitiveCount++;
+                continue;
+            }
+            System.out.println(counter + ": " + p);
+            counter++;
+        }
+        double u = new java.util.Random().nextDouble() - 0.5;
+        double noise = -(1.0 / epsilon) * Math.signum(u) * Math.log(1 - 2 * Math.abs(u));
+        System.out.println("(+ " + String.format("%.2f", sensitiveCount + noise) + " sensitive paths, protected)");
+        return counter;
+    }
+
+    /**
+     * Selective-DP SUM over a numeric node property (e.g. Message.length) at a given 1-indexed
+     * node position in each result path. `clipBound` bounds the contribution of one sensitive path;
+     * non-sensitive contributions are exact and unclipped.
+     */
+    public static double sumWithDP(final PhysicalOperator po, final Condition sensitivityCondition,
+                                    final String valueProperty, final int valueNodePos,
+                                    final double clipBound, final double epsilon) {
+        double exactSum = 0, clippedSensitiveSum = 0;
+        while (po.hasNext()) {
+            Path p = po.next();
+            double value = Double.parseDouble(p.getNodeAt(valueNodePos - 1).getProperty(valueProperty));
+            if (sensitivityCondition.eval(p)) {
+                clippedSensitiveSum += Math.min(Math.max(value, 0), clipBound);
+            } else {
+                exactSum += value;
+            }
+        }
+        double u = new java.util.Random().nextDouble() - 0.5;
+        double noise = -(clipBound / epsilon) * Math.signum(u) * Math.log(1 - 2 * Math.abs(u));
+        return exactSum + clippedSensitiveSum + noise;
     }
 
 }
