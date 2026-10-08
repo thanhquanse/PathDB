@@ -1,0 +1,1 @@
+MATCH p = (x)-[knows.created]->(y) WHERE x.name = "Karim" RETURN x.name, y.txt;

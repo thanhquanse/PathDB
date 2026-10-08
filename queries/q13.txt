@@ -1,0 +1,1 @@
+MATCH ACYCLIC p = (x)-[knows+]{..4}->(y) WHERE EDGE(1).atContext = "school" AND NODE(1).gender = "female" RETURN y.name, y.birthYear LIMIT 100;

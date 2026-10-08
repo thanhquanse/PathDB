@@ -1,0 +1,1 @@
+MATCH p = (x)-[knows]->(y) WHERE EDGE(0).atContext = "school" RETURN x.name, y.name LIMIT 100;

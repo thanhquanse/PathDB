@@ -1,0 +1,1 @@
+MATCH ACYCLIC p = (x)-[hasCreator?.knows*]{..6}->(y) WHERE x.name = "Karim" OR x.txt = "Msg1" RETURN p;

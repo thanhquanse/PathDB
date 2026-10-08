@@ -6,3 +6,4 @@ target/
 .vscode/
 graph/
 .antlr/
+LDBC

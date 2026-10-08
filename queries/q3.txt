@@ -1,0 +1,1 @@
+MATCH WALK p = (x)-[hasCreator?.knows*.created]->(y) WHERE p.LENGTH < 4 AND NODE(2).name = "Bob" RETURN p;

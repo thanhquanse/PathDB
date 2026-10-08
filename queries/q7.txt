@@ -1,0 +1,1 @@
+MATCH p = (x)-[knows]->(y) WHERE EDGE(1).context = "work" RETURN p LIMIT 20;

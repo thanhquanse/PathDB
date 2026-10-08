@@ -236,7 +236,8 @@ public final class Execute {
                         System.out.println("Usage: /sdp-execute <query>;  (load a dataset first with /load -n ... -e ...)\n");
                     } else {
                         try {
-                            Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 200);
+                            // Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600);
+                            Evaluator.compare(q, sdpPattern, new double[]{0.1, 0.5, 1, 2, 5, 10}, 600.0, 50, 42L);
                         } catch (Exception e) {
                             System.out.println(e);
                         }

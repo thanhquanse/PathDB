@@ -1,0 +1,1 @@
+MATCH ACYCLIC p = (x)-[knows+]{..4}->(y) WHERE x.name = "Alice" AND y.name = "Bob" RETURN p LIMIT 1000;
