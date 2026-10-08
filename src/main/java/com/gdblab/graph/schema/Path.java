@@ -156,7 +156,7 @@ public class Path extends GraphObject {
 
     public Edge getEdgeAt(final int pos) {
         final ArrayList<Edge> seq = this.getEdgeSequence();
-        if (seq.size() >= pos) {
+        if (pos >= 0 && pos < seq.size()) {
             return seq.get(pos);
         }
         return null;

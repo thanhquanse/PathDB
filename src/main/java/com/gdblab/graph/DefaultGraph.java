@@ -53,6 +53,18 @@ public final class DefaultGraph {
     private DefaultGraph() {
     }
 
+    private static String getKnowsContext(int edgeNumber) {
+        String[] contexts = {
+                "work",
+                "school",
+                "family",
+                "neighborhood",
+                "conference"
+        };
+
+        return contexts[(edgeNumber - 1) % contexts.length];
+    }
+
     public static Node[] getDefaultNodes() {
         Node[] nodes = new Node[PERSON_COUNT + MESSAGE_COUNT];
 
@@ -70,6 +82,11 @@ public final class DefaultGraph {
             }
 
             personProperties.put("name", personName);
+
+            personProperties.put(
+                    "birthYear",
+                    String.valueOf(1940 + ((i - 1) % 61))
+            );
 
             nodes[i - 1] = new Node(
                     "p" + i,
@@ -117,12 +134,30 @@ public final class DefaultGraph {
                     targetIndex = 1 + random.nextInt(PERSON_COUNT);
                 } while (targetIndex == sourceIndex);
 
+                HashMap<String, String> knowsProperties = new HashMap<>();
+
+                /*
+                * Keep the value in YYYYMMDD form.
+                *
+                * Examples:
+                * "20120102"
+                * "20120315"
+                * "20121128"
+                *
+                * The fixed-width format is useful for comparisons such as:
+                * EDGE(1).creationDate > 20120101
+                */
+                knowsProperties.put(
+                        "atContext",
+                        getKnowsContext(edgeId)
+                );
+
                 edges.add(new Edge(
                         "E" + edgeId++,
                         "knows",
                         graph.getNode("p" + sourceIndex),
                         graph.getNode("p" + targetIndex),
-                        new HashMap<String, String>()
+                        knowsProperties
                 ));
             }
         }

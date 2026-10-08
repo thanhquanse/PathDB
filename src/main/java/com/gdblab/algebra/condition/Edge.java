@@ -21,7 +21,7 @@ public class Edge  extends Condition{
         this.prop = prop;
         this.condition = condition;
         this.value = value;
-        this.pos = pos;
+        this.pos = pos - 1;
     }
     
 
@@ -32,7 +32,7 @@ public class Edge  extends Condition{
             com.gdblab.graph.schema.Edge edge = p.getEdgeAt(this.pos);
 
             if (edge == null) return false;
-            if (edge.getProperties().containsKey(this.prop)) return false;
+            if (!edge.getProperties().containsKey(this.prop)) return false;
 
             Float value_1 = null;
             Float value_2 = null;

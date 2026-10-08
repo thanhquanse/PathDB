@@ -73,6 +73,19 @@ public class Edge extends GraphObject {
         sb.append(",");
         sb.append("\"target\": ");
         sb.append(this.target.toString());
+        sb.append(",");
+        sb.append(" \"properties\": {");
+
+        if (properties != null && !properties.isEmpty()) {
+            int count = 0;
+            for (var entry : properties.entrySet()) {
+                sb.append("\"").append(entry.getKey()).append("\": \"").append(entry.getValue()).append("\"");
+                if (++count < properties.size()) {
+                    sb.append(",");
+                }
+            }
+        }
+        sb.append("}");
         sb.append("}");
         return sb.toString();
     }
