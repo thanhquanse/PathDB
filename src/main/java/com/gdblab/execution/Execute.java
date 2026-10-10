@@ -236,8 +236,17 @@ public final class Execute {
                         System.out.println("Usage: /sdp-execute <query>;  (load a dataset first with /load -n ... -e ...)\n");
                     } else {
                         try {
-                            // Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600);
-                            Evaluator.compare(q, sdpPattern, new double[]{0.1, 0.5, 1, 2, 5, 10}, 600.0, 50, 42L);
+                            System.out.println("One run, SENSITIVE_ONLY, detailed tables");
+                            Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600);
+
+                            // System.out.println("One run, SENSITIVE_ONLY scope, detailed tables");
+                            // Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600, Evaluator.Scope.SENSITIVE_ONLY);
+
+                            // System.out.println("One run, ALL_EDGES scope, detailed tables");
+                            // Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600, Evaluator.Scope.ALL_EDGES);
+
+                            // System.out.println("SENSITIVE_ONLY vs ALL_EDGES error table");
+                            // Evaluator.compare(q, sdpPattern, new double[]{0.1, 0.5, 1, 2, 5, 10}, 600.0, 50, 42L);
                         } catch (Exception e) {
                             System.out.println(e);
                         }
