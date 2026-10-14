@@ -2,6 +2,7 @@ package com.gdblab.execution;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.function.Function;
 
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
@@ -30,6 +31,7 @@ import com.gdblab.algebra.queryplan.physical.PhysicalOperator;
 import com.gdblab.algebra.queryplan.util.Utils;
 import com.gdblab.graph.Graph;
 import com.gdblab.graph.schema.Edge;
+import com.gdblab.graph.schema.Node;
 import com.gdblab.privacy.SelectiveDPRedactor;
 import com.gdblab.privacy.SensitivePatternPolicy;
 import com.gdlab.parser.RPQGrammarLexer;
@@ -235,18 +237,32 @@ public final class Execute {
                     if (q.isEmpty() || !q.endsWith(";")) {
                         System.out.println("Usage: /sdp-execute <query>;  (load a dataset first with /load -n ... -e ...)\n");
                     } else {
+                        Function<Node, String> decade = nd -> {
+                            String y = (nd.getProperties() == null) ? null : nd.getProperties().get("birthYear");
+                            return (y != null && y.length() >= 4) ? y.substring(0, 3) + "0s" : String.valueOf(nd.getLabel());
+                        };
                         try {
-                            System.out.println("One run, SENSITIVE_ONLY, detailed tables");
-                            Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600);
+                            // System.out.println("====== Explain =====");
+                            // DataReleaseEvaluator.explain(q, sdpPattern, 1.0, 2, 3, 42L, decade);
 
-                            // System.out.println("One run, SENSITIVE_ONLY scope, detailed tables");
-                            // Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600, Evaluator.Scope.SENSITIVE_ONLY);
+                            // System.out.println("====== Compare ======");
+                            // DataReleaseEvaluator.compare(q, sdpPattern, new double[]{0.01, 0.1, 0.5, 1.0}, new int[]{2, 3}, 100, 42L, decade, 0, 10);
 
-                            // System.out.println("One run, ALL_EDGES scope, detailed tables");
-                            // Evaluator.run(q, sdpPattern, sdpRedactor.getEpsilonPerRelease(), 600, Evaluator.Scope.ALL_EDGES);
+                            // System.out.println("====== SweepSensitiveEdges ======");
+                            // DataReleaseEvaluator.sweepSensitiveEdges(q, sdpPattern, new double[]{0.01, 0.10, 0.25, 0.50, 0.75, 1.0}, 1.0, 2, 100, 42L, decade, 0, 10);
 
-                            // System.out.println("SENSITIVE_ONLY vs ALL_EDGES error table");
-                            // Evaluator.compare(q, sdpPattern, new double[]{0.1, 0.5, 1, 2, 5, 10}, 600.0, 50, 42L);
+                            // System.out.println("====== Elastic example queries ======");
+                            // Evaluator.main(args);
+
+                            // Selected fields: the creator's birthYear (second last node; sensitive) and the message length (last node; not sensitive).
+                            // Add Field("salary", new Attr("salary", 0, 200000, true), -2, true) later for a salary column.
+                            DataDistanceEvaluator.Config cfg = new DataDistanceEvaluator.Config()
+                                    .field(new DataDistanceEvaluator.Field("birthYear", DataDistanceEvaluator.BIRTH_YEAR, -2, true))
+                                    .field(new DataDistanceEvaluator.Field("length", DataDistanceEvaluator.MESSAGE_LENGTH, -1, false))
+                                    .owner(nd -> nd.getProperties() != null && sdpPattern.getSensitiveNodeNames().contains(nd.getProperties().get("name")));
+
+                            DataDistanceEvaluator.explain(q, sdpPattern, 1.0, cfg, 5, 42L);
+                            DataDistanceEvaluator.compare(q, sdpPattern, new double[]{0.5, 1.0, 2.0, 5.0}, cfg, 100, 42L);
                         } catch (Exception e) {
                             System.out.println(e);
                         }

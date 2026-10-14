@@ -1,289 +1,296 @@
 package com.gdblab.privacy;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-
-import com.gdblab.privacy.SelectiveDPRedactor.ExponentialMechanism;
+import java.util.Arrays;
+import java.util.SplittableRandom;
 
 /**
- * Utility and privacy evaluation for the selective-DP mechanisms in
- * {@link SelectiveDPRedactor}. Two complementary things are measured:
+ * Metrics used to evaluate a differentially private query pipeline. No dependency on the query engine.
  *
- * <ul>
- *   <li><b>Utility</b>: how close the privatized output stays to the truth
- *       (match rate / edit distance for categorical point releases, MAE / relative
- *       error for aggregate counts).</li>
- *   <li><b>Privacy</b>: an empirical Monte-Carlo audit that the implementation
- *       actually respects the eps-DP bound it claims - for two "neighboring" true
- *       values A and B (a dataset differing in one sensitive attribute), the ratio
- *       of how often the mechanism produces the same output for A vs B should never
- *       exceed exp(eps), by the definition of DP. Measuring this directly is what
- *       lets you argue the mechanism is correct, not just calibrated on paper.</li>
- * </ul>
+ * UTILITY (error against ground truth)
+ *   relErr, trimmedMean, median, mean, std
+ *   The trimmed mean follows the protocol used in the R2T line of work (as stated by its follow-up DP-S4S):
+ *   100 runs, drop the 20 largest and 20 smallest, average the rest.
  *
- * None of this changes SelectiveDPRedactor's behavior; it only exercises it
- * repeatedly (off to the side, with its own throwaway mechanism instances) to
- * produce numbers you can put in a table or a plot.
+ * PRIVACY (empirical audit, after Jagielski-Ullman-Oprea 2020 and Tramer et al. 2022)
+ *   audit(...) plays the distinguishing game "was record r in the data?" on two worlds D and D-r:
+ *   the attacker picks a threshold rule on one half of the released values, and on the other half we compute
+ *   Clopper-Pearson bounds on its true/false positive rates. For an eps-DP mechanism, any event E satisfies
+ *   P[E | D] <= e^eps * P[E | D-r], so  eps >= ln( P[E|D] / P[E|D-r] )  and the empirical value is a LOWER bound
+ *   on the true eps of the mechanism. If it exceeds the claimed eps, the implementation or the sensitivity
+ *   assumption is wrong. The audit can never certify privacy, only detect violations or exact leaks.
  */
 public final class DPMetrics {
 
     private DPMetrics() {}
 
-    // ------------------------------------------------------------------
-    // Aggregate (COUNT) utility
-    // ------------------------------------------------------------------
-
-    public static final class AggregateUtilityReport {
-        public final Map<String, Long> rawCounts;
-        public final Map<String, Double> noisyCounts;
-        public final double mae;              // mean absolute error across groups
-        public final double meanRelativeError; // mean |noisy-raw|/raw across groups (raw>0 only)
-
-        AggregateUtilityReport(Map<String, Long> raw, Map<String, Double> noisy,
-                                double mae, double meanRelativeError) {
-            this.rawCounts = raw;
-            this.noisyCounts = noisy;
-            this.mae = mae;
-            this.meanRelativeError = meanRelativeError;
-        }
+    // ------------------------------------------------------------------ utility statistics
+    public static double mean(final double[] a) {
+        double s = 0;
+        int n = 0;
+        for (double v : a) if (!Double.isNaN(v)) { s += v; n++; }
+        return n == 0 ? Double.NaN : s / n;
     }
 
-    public static AggregateUtilityReport evaluateAggregate(final Map<String, Long> raw,
-                                                             final Map<String, Double> noisy) {
-        double sumAbsErr = 0;
-        double sumRelErr = 0;
-        int relCount = 0;
-        for (Map.Entry<String, Long> e : raw.entrySet()) {
-            double noisyVal = noisy.getOrDefault(e.getKey(), 0.0);
-            double absErr = Math.abs(noisyVal - e.getValue());
-            sumAbsErr += absErr;
-            if (e.getValue() > 0) {
-                sumRelErr += absErr / e.getValue();
-                relCount++;
-            }
-        }
-        double mae = raw.isEmpty() ? 0 : sumAbsErr / raw.size();
-        double mre = relCount == 0 ? 0 : sumRelErr / relCount;
-        return new AggregateUtilityReport(raw, noisy, mae, mre);
+    public static double std(final double[] a) {
+        double m = mean(a);
+        double s = 0;
+        int n = 0;
+        for (double v : a) if (!Double.isNaN(v)) { s += (v - m) * (v - m); n++; }
+        return n < 2 ? 0.0 : Math.sqrt(s / (n - 1));
     }
 
-    /** Runs the noisy-count mechanism `trials` times (fresh randomness each time,
-     *  same raw counts) and reports the AVERAGE mae/relative error across trials -
-     *  a single trial's error is itself a random variable, this smooths it out. */
-    public static AggregateUtilityReport evaluateAggregateOverTrials(
-            final List<com.gdblab.graph.schema.Path> paths,
-            final java.util.function.Function<com.gdblab.graph.schema.Path, String> groupKeyFn,
-            final double epsilon,
-            final int trials) {
-        Map<String, Long> raw = SelectiveDPRedactor.DPCountAggregator.rawCounts(paths, groupKeyFn);
-        double sumMae = 0, sumMre = 0;
-        Map<String, Double> lastNoisy = new LinkedHashMap<>();
-        for (int t = 0; t < trials; t++) {
-            SelectiveDPRedactor.DPCountAggregator agg = new SelectiveDPRedactor.DPCountAggregator();
-            SelectiveDPRedactor.PrivacyAccountant scratchAccountant = new SelectiveDPRedactor.PrivacyAccountant();
-            Map<String, Double> noisy = agg.noisyCounts(paths, groupKeyFn, epsilon, scratchAccountant);
-            AggregateUtilityReport r = evaluateAggregate(raw, noisy);
-            sumMae += r.mae;
-            sumMre += r.meanRelativeError;
-            lastNoisy = noisy;
-        }
-        return new AggregateUtilityReport(raw, lastNoisy, sumMae / trials, sumMre / trials);
+    public static double median(final double[] a) {
+        double[] c = a.clone();
+        Arrays.sort(c);
+        int n = c.length;
+        if (n == 0) return Double.NaN;
+        return n % 2 == 1 ? c[n / 2] : 0.5 * (c[n / 2 - 1] + c[n / 2]);
     }
 
-    // ------------------------------------------------------------------
-    // Point-release (categorical Exponential Mechanism) utility
-    // ------------------------------------------------------------------
-
-    public static final class PointUtilityReport {
-        public final double matchRate;          // empirical P(output == trueValue)
-        public final double meanEditDistance;    // empirical average edit distance from truth
-        public PointUtilityReport(double matchRate, double meanEditDistance) {
-            this.matchRate = matchRate;
-            this.meanEditDistance = meanEditDistance;
-        }
+    /** p-th percentile (0..1) with linear interpolation; p = 0.95 gives the "Rel95" tail error used by one-sided DP. */
+    public static double percentile(final double[] a, final double p) {
+        double[] c = a.clone();
+        Arrays.sort(c);
+        int n = c.length;
+        if (n == 0) return Double.NaN;
+        double pos = p * (n - 1);
+        int lo = (int) Math.floor(pos), hi = (int) Math.ceil(pos);
+        return c[lo] + (pos - lo) * (c[hi] - c[lo]);
     }
 
-    public static PointUtilityReport evaluatePointRelease(final String trueValue,
-                                                            final List<String> domain,
-                                                            final double epsilon,
-                                                            final int trials) {
-        ExponentialMechanism mech = new ExponentialMechanism();
-        int matches = 0;
-        long totalDist = 0;
-        for (int i = 0; i < trials; i++) {
-            String out = mech.privatize(trueValue, domain, epsilon);
-            if (out.equals(trueValue)) matches++;
-            totalDist += levenshtein(trueValue, out);
-        }
-        return new PointUtilityReport((double) matches / trials, (double) totalDist / trials);
-    }
-
-    private static int levenshtein(String a, String b) {
-        int[][] dp = new int[a.length() + 1][b.length() + 1];
-        for (int i = 0; i <= a.length(); i++) dp[i][0] = i;
-        for (int j = 0; j <= b.length(); j++) dp[0][j] = j;
-        for (int i = 1; i <= a.length(); i++) {
-            for (int j = 1; j <= b.length(); j++) {
-                int cost = (a.charAt(i - 1) == b.charAt(j - 1)) ? 0 : 1;
-                dp[i][j] = Math.min(Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
-            }
-        }
-        return dp[a.length()][b.length()];
-    }
-
-    // ------------------------------------------------------------------
-    // Repeated-trial utility evaluation, following Buil-Aranda, Lobo & Olmedo,
-    // "Differential Privacy and SPARQL" (Semantic Web 15, 2024), Section 6.3.
-    // Their metric: run the noisy query `trials` times (they use 100) and report
-    //   median( (ActualCount - NoisyResult_i) / ActualCount * 100 )  for i=1..trials
-    // alongside the true count and the sensitivity/mechanism used, then compare
-    // across query "shapes" (their star/path/snowflake) to see how utility degrades
-    // with join count and shrinks with result size. This is domain-independent -
-    // the formula doesn't reference SPARQL specifics - so it applies unchanged here.
-    // ------------------------------------------------------------------
-
-    public static final class RepeatedTrialReport {
-        public final long trueCount;
-        public final double medianSignedErrorPercent;   // their exact formula, signed
-        public final double medianAbsoluteErrorPercent;  // magnitude only - what Fig. 5 actually plots
-        public final double meanPrivateResult;
-        public final double epsilon;
-        public final int trials;
-        public final double sensitivity;   // how much one record can change the true count: 1, for a COUNT
-        public final double noiseScale;    // Laplace scale = sensitivity / epsilon - the "typical noise size"
-
-        RepeatedTrialReport(long trueCount, double medianSignedErrorPercent,
-                             double medianAbsoluteErrorPercent, double meanPrivateResult,
-                             double epsilon, int trials, double sensitivity) {
-            this.trueCount = trueCount;
-            this.medianSignedErrorPercent = medianSignedErrorPercent;
-            this.medianAbsoluteErrorPercent = medianAbsoluteErrorPercent;
-            this.meanPrivateResult = meanPrivateResult;
-            this.epsilon = epsilon;
-            this.trials = trials;
-            this.sensitivity = sensitivity;
-            this.noiseScale = sensitivity / Math.max(epsilon, 1e-9);
-        }
-
-        /** Plain-language read on whether this result is usable, purely from the
-         *  measured median error - no DP background needed to interpret it. These
-         *  cutoffs are a reasonable rule of thumb, not a formal standard: adjust them
-         *  if your application has a specific accuracy requirement. */
-        public String utilityRating() {
-            return DPMetrics.utilityRating(medianAbsoluteErrorPercent);
-        }
-    }
-
-    /** <10%: differs so little from the truth it's close to publishing raw data - fine
-     *  for most uses, but double-check eps is actually strong enough privacy for your
-     *  threat model, since very low error often means very weak protection.
-     *  10-25%: usable for trends/rankings, not for citing a specific number.
-     *  25-50%: only the rough order of magnitude survives.
-     *  50-100%: noise is comparable to or bigger than the signal - largely unusable.
-     *  >100%: the noisy value is expected to be further from the truth than zero
-     *  would be - the release conveys essentially nothing about the true count. */
-    public static String utilityRating(final double medianAbsoluteErrorPercent) {
-        if (medianAbsoluteErrorPercent < 10) return "EXCELLENT (<10% error)";
-        if (medianAbsoluteErrorPercent < 25) return "GOOD (10-25% error)";
-        if (medianAbsoluteErrorPercent < 50) return "MODERATE (25-50% error)";
-        if (medianAbsoluteErrorPercent < 100) return "POOR (50-100% error)";
-        return "UNUSABLE (>100% error - noise exceeds the signal)";
+    /** Mean after dropping floor(frac*n) smallest and floor(frac*n) largest values (frac = 0.2 -> 20 of 100). */
+    public static double trimmedMean(final double[] a, final double frac) {
+        double[] c = a.clone();
+        Arrays.sort(c);
+        int n = c.length;
+        int k = (int) Math.floor(frac * n);
+        if (n - 2 * k <= 0) return median(a);
+        double s = 0;
+        for (int i = k; i < n - k; i++) s += c[i];
+        return s / (n - 2 * k);
     }
 
     /**
-     * Evaluates a single, ungrouped COUNT(*) query (Buil-Aranda et al.'s plain
-     * COUNT_x(B) form - no GROUP BY) over `paths.size()` trials.
+     * RelError of DP4SQL (Cascio et al., 2026, Section 9.2): |y - yHat| / max(1, y), y = true answer, yHat = noisy answer.
+     * It equals relErr(y, yHat, 1.0) for y >= 0 (counts, sums of non-negative values).
      */
-    public static RepeatedTrialReport evaluateCountRepeatedTrials(final List<com.gdblab.graph.schema.Path> paths,
-                                                                    final double epsilon,
-                                                                    final int trials) {
-        long trueCount = paths.size();
-        double[] signedErrors = new double[trials];
-        double sumPrivate = 0;
-        SelectiveDPRedactor.DPCountAggregator agg = new SelectiveDPRedactor.DPCountAggregator();
-
-        for (int t = 0; t < trials; t++) {
-            SelectiveDPRedactor.PrivacyAccountant scratch = new SelectiveDPRedactor.PrivacyAccountant();
-            Map<String, Double> noisy = agg.noisyCounts(paths, p -> "ALL", epsilon, scratch);
-            double noisyVal = noisy.getOrDefault("ALL", 0.0);
-            sumPrivate += noisyVal;
-            signedErrors[t] = trueCount == 0 ? 0.0 : (trueCount - noisyVal) * 100.0 / trueCount;
-        }
-
-        double medianSigned = median(signedErrors);
-        double[] absErrors = new double[trials];
-        for (int t = 0; t < trials; t++) absErrors[t] = Math.abs(signedErrors[t]);
-        double medianAbs = median(absErrors);
-
-        return new RepeatedTrialReport(trueCount, medianSigned, medianAbs, sumPrivate / trials, epsilon, trials, /*sensitivity=*/1.0);
-    }
-
-    private static double median(final double[] values) {
-        double[] sorted = values.clone();
-        java.util.Arrays.sort(sorted);
-        int n = sorted.length;
-        return (n % 2 == 1) ? sorted[n / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
-    }
-
-    // ------------------------------------------------------------------
-    // Privacy audit: empirically check the eps-DP bound holds between two
-    // "neighboring" true values (a dataset differing in one sensitive attribute).
-    // ------------------------------------------------------------------
-
-    public static final class PrivacyAuditReport {
-        public final double claimedEpsilon;
-        public final double observedMaxLogRatio; // max over outcomes of |ln(P_A(o)/P_B(o))|
-        public final boolean withinBound;         // observedMaxLogRatio <= claimedEpsilon (+ tolerance)
-        PrivacyAuditReport(double claimedEpsilon, double observedMaxLogRatio, boolean withinBound) {
-            this.claimedEpsilon = claimedEpsilon;
-            this.observedMaxLogRatio = observedMaxLogRatio;
-            this.withinBound = withinBound;
-        }
+    public static double relError(final double y, final double yHat) {
+        return Math.abs(y - yHat) / Math.max(1.0, y);
     }
 
     /**
-     * Monte-Carlo audit of the Exponential Mechanism: draws `trials` samples for
-     * trueValue = valueA and `trials` samples for trueValue = valueB (two neighboring
-     * "databases" differing in this one attribute), builds an empirical output
-     * distribution for each, and checks that for every observed outcome o,
-     * P(mechanism(A) = o) / P(mechanism(B) = o) stays within exp(epsilon), which is
-     * exactly the eps-DP guarantee's definition. This is a sanity check on the
-     * IMPLEMENTATION, not a substitute for the analytical proof (finite trials only
-     * bound this with statistical, not certain, confidence - increase `trials` for a
-     * tighter check, and treat a violation as a real bug signal, not noise, once
-     * trials is in the thousands+).
+     * RelError of a system that always outputs 0 (the dashed reference line in DP4SQL's boxplots): 1.0 for every y >= 1.
+     * An arm whose RelError is >= 1.0 is no better than answering 0.
      */
-    public static PrivacyAuditReport auditExponentialMechanism(final String valueA,
-                                                                 final String valueB,
-                                                                 final List<String> domain,
-                                                                 final double epsilon,
-                                                                 final int trials) {
-        ExponentialMechanism mech = new ExponentialMechanism();
-        Map<String, Integer> countsA = new HashMap<>();
-        Map<String, Integer> countsB = new HashMap<>();
-        for (String d : domain) { countsA.put(d, 0); countsB.put(d, 0); }
+    public static final double ALWAYS_ZERO_REL_ERROR = 1.0;
 
-        for (int i = 0; i < trials; i++) {
-            countsA.merge(mech.privatize(valueA, domain, epsilon), 1, Integer::sum);
-            countsB.merge(mech.privatize(valueB, domain, epsilon), 1, Integer::sum);
+    /** Reading of a median RelError against the always-0 reference line. */
+    public static String verdictVsZero(final double medianRelError) {
+        if (medianRelError < ALWAYS_ZERO_REL_ERROR - 1e-9) return "better than always-0";
+        if (medianRelError <= ALWAYS_ZERO_REL_ERROR + 1e-9) return "same as always-0 (nothing useful released)";
+        return "WORSE than always-0";
+    }
+
+    /** Five-number summary + mean, the numbers behind one boxplot. */
+    public record BoxStats(int n, double min, double q1, double median, double q3, double max, double mean) {}
+
+    public static BoxStats boxStats(final double[] a) {
+        return new BoxStats(a.length, percentile(a, 0.0), percentile(a, 0.25), percentile(a, 0.5),
+                percentile(a, 0.75), percentile(a, 1.0), mean(a));
+    }
+
+    /** |est - truth| / max(|truth|, sanity). The sanity bound keeps tiny true values from exploding the ratio. */
+    public static double relErr(final double truth, final double est, final double sanity) {
+        return Math.abs(est - truth) / Math.max(Math.abs(truth), sanity);
+    }
+
+    // ------------------------------------------------------------------ Clopper-Pearson
+    private static double[] LF = new double[]{0.0};
+
+    private static synchronized double logFact(final int n) {
+        if (n >= LF.length) {
+            int old = LF.length;
+            LF = Arrays.copyOf(LF, Math.max(n + 1, old * 2));
+            for (int i = old; i < LF.length; i++) LF[i] = LF[i - 1] + Math.log(i);
+        }
+        return LF[n];
+    }
+
+    /** P[X <= k] for X ~ Binomial(n, p). */
+    static double binomCdf(final int k, final int n, final double p) {
+        if (k < 0) return 0.0;
+        if (k >= n) return 1.0;
+        if (p <= 0.0) return 1.0;
+        if (p >= 1.0) return 0.0;
+        double lp = Math.log(p);
+        double lq = Math.log1p(-p);
+        double s = 0;
+        for (int i = 0; i <= k; i++) {
+            s += Math.exp(logFact(n) - logFact(i) - logFact(n - i) + i * lp + (n - i) * lq);
+        }
+        return Math.min(1.0, s);
+    }
+
+    /** One-sided upper confidence bound for a binomial proportion with k successes in n trials. */
+    public static double cpUpper(final int k, final int n, final double alpha) {
+        if (k >= n) return 1.0;
+        double lo = k / (double) n, hi = 1.0;
+        for (int it = 0; it < 80; it++) {
+            double mid = 0.5 * (lo + hi);
+            if (binomCdf(k, n, mid) > alpha) lo = mid; else hi = mid;
+        }
+        return hi;
+    }
+
+    /** One-sided lower confidence bound for a binomial proportion with k successes in n trials. */
+    public static double cpLower(final int k, final int n, final double alpha) {
+        if (k <= 0) return 0.0;
+        double lo = 0.0, hi = k / (double) n;
+        for (int it = 0; it < 80; it++) {
+            double mid = 0.5 * (lo + hi);
+            if (1.0 - binomCdf(k - 1, n, mid) > alpha) hi = mid; else lo = mid;
+        }
+        return lo;
+    }
+
+    // ------------------------------------------------------------------ empirical privacy audit
+    /**
+     * epsLower : empirical lower bound on eps (0 if no violation of eps=0 can be shown)
+     * p1/p0    : rate of the attacker's event in world D / world D-r on the test half
+     * rule     : the attacker's rule, chosen on the other half
+     * nTest    : samples per world used for the bounds (the largest measurable eps is about ln(nTest/3.7))
+     */
+    public record AuditResult(double epsLower, double p1, double p0, int nTest, String rule) {}
+
+    /** Distinguishing game on released scalars from world D (w1) and world D-r (w0). alpha = 0.05 -> 95%. */
+    public static AuditResult audit(final double[] w1, final double[] w0, final double alpha) {
+        double[] v1 = half(w1, 0), t1 = half(w1, 1);
+        double[] v0 = half(w0, 0), t0 = half(w0, 1);
+
+        double[] cand = thresholds(v1, v0, 300);
+        final double z = 2.24;     // ~ two-sided 97.5% -> used only to CHOOSE the rule on the validation half
+        double bestScore = -1;
+        double bestTau = 0;
+        boolean bestGe = true;
+        boolean bestDir = true;   // true: bound uses P[E|D]/P[E|D-r]; false: the reverse
+
+        for (double tau : cand) {
+            for (int o = 0; o < 2; o++) {
+                boolean ge = o == 0;
+                int c1 = count(v1, tau, ge);
+                int c0 = count(v0, tau, ge);
+                for (int d = 0; d < 2; d++) {
+                    boolean dir = d == 0;
+                    int num = dir ? c1 : c0, nNum = dir ? v1.length : v0.length;
+                    int den = dir ? c0 : c1, nDen = dir ? v0.length : v1.length;
+                    double lo = wilsonLower(num, nNum, z);
+                    double hi = wilsonUpper(den, nDen, z);
+                    double score = lo > hi ? Math.log(lo / hi) : 0.0;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestTau = tau; bestGe = ge; bestDir = dir;
+                    }
+                }
+            }
         }
 
-        double maxLogRatio = 0;
-        for (String outcome : domain) {
-            // Laplace-smooth by 0.5 to avoid divide-by-zero / log(0) from rare outcomes
-            // at small `trials`; increase trials rather than relying on this to
-            // reduce estimation error.
-            double pA = (countsA.get(outcome) + 0.5) / (trials + 0.5 * domain.size());
-            double pB = (countsB.get(outcome) + 0.5) / (trials + 0.5 * domain.size());
-            double logRatio = Math.abs(Math.log(pA / pB));
-            maxLogRatio = Math.max(maxLogRatio, logRatio);
-        }
+        int k1 = count(t1, bestTau, bestGe);
+        int k0 = count(t0, bestTau, bestGe);
+        int kNum = bestDir ? k1 : k0, nNum = bestDir ? t1.length : t0.length;
+        int kDen = bestDir ? k0 : k1, nDen = bestDir ? t0.length : t1.length;
+        double pL = cpLower(kNum, nNum, alpha / 2);
+        double pU = cpUpper(kDen, nDen, alpha / 2);
+        double eps = pL > pU ? Math.log(pL / pU) : 0.0;
+        String rule = String.format("guess by (x %s %.2f), %s", bestGe ? ">=" : "<=", bestTau,
+                bestDir ? "world D" : "world D-r");
+        return new AuditResult(eps, k1 / (double) t1.length, k0 / (double) t0.length, Math.min(t1.length, t0.length), rule);
+    }
 
-        // small statistical slack since this is empirical, not exact
-        boolean withinBound = maxLogRatio <= epsilon + 0.5;
-        return new PrivacyAuditReport(epsilon, maxLogRatio, withinBound);
+    /** Wilson score bounds: cheap, used only to pick the attacker's rule (the reported bounds are Clopper-Pearson). */
+    private static double wilsonLower(final int k, final int n, final double z) {
+        if (n == 0) return 0;
+        double p = k / (double) n, z2 = z * z;
+        return Math.max(0.0, (p + z2 / (2 * n) - z * Math.sqrt(p * (1 - p) / n + z2 / (4.0 * n * n))) / (1 + z2 / n));
+    }
+
+    private static double wilsonUpper(final int k, final int n, final double z) {
+        if (n == 0) return 1;
+        double p = k / (double) n, z2 = z * z;
+        return Math.min(1.0, (p + z2 / (2 * n) + z * Math.sqrt(p * (1 - p) / n + z2 / (4.0 * n * n))) / (1 + z2 / n));
+    }
+
+    private static double[] half(final double[] a, final int parity) {
+        int n = (a.length + (parity == 0 ? 1 : 0)) / 2;
+        double[] r = new double[n];
+        int j = 0;
+        for (int i = parity; i < a.length && j < n; i += 2) r[j++] = a[i];
+        return Arrays.copyOf(r, j);
+    }
+
+    private static double[] thresholds(final double[] a, final double[] b, final int max) {
+        double[] all = new double[a.length + b.length];
+        System.arraycopy(a, 0, all, 0, a.length);
+        System.arraycopy(b, 0, all, a.length, b.length);
+        Arrays.sort(all);
+        int u = 0;
+        double[] uniq = new double[all.length];
+        for (int i = 0; i < all.length; i++) if (i == 0 || all[i] != all[i - 1]) uniq[u++] = all[i];
+        if (u <= max) return Arrays.copyOf(uniq, u);
+        double[] r = new double[max];
+        for (int i = 0; i < max; i++) r[i] = uniq[(int) ((long) i * (u - 1) / (max - 1))];
+        return r;
+    }
+
+    private static int count(final double[] a, final double tau, final boolean ge) {
+        int c = 0;
+        for (double v : a) if (ge ? v >= tau : v <= tau) c++;
+        return c;
+    }
+
+    // ------------------------------------------------------------------ Laplace sampling for audits
+    public static double laplace(final SplittableRandom rng, final double scale) {
+        double u;
+        do { u = rng.nextDouble() - 0.5; } while (u == -0.5);
+        return -scale * Math.signum(u) * Math.log(1.0 - 2.0 * Math.abs(u));
+    }
+
+    /** splitmix64-style mixing, so consecutive trial numbers give unrelated seeds. */
+    public static long mix(final long a, final long b, final long c) {
+        long z = a * 0x9E3779B97F4A7C15L + b * 0xBF58476D1CE4E5B9L + c * 0x94D049BB133111EBL;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+
+    // ------------------------------------------------------------------ self-test:  java DpMetrics.java
+    public static void main(String[] args) {
+        SplittableRandom r = new SplittableRandom(7);
+        int n = 6000;
+        double[] w1 = new double[n], w0 = new double[n];
+
+        for (int i = 0; i < n; i++) { w1[i] = 1 + laplace(r, 1.0); w0[i] = laplace(r, 1.0); }
+        AuditResult ok = audit(w1, w0, 0.05);
+        System.out.printf("correct   Laplace(1/eps), eps=1.0 : eps_lower=%.2f  (must be <= 1.0)  [%s]%n", ok.epsLower(), ok.rule());
+
+        for (int i = 0; i < n; i++) { w1[i] = 1 + laplace(r, 0.3); w0[i] = laplace(r, 0.3); }
+        AuditResult bad = audit(w1, w0, 0.05);
+        System.out.printf("too little noise (scale 0.3, true eps 3.33): eps_lower=%.2f  (> 1.0 -> violation caught)%n", bad.epsLower());
+
+        for (int i = 0; i < n; i++) { w1[i] = 1; w0[i] = 0; }
+        AuditResult ex = audit(w1, w0, 0.05);
+        System.out.printf("exact release (no noise)          : eps_lower=%.2f  (limited only by the number of trials, cap ~ %.1f)%n",
+                ex.epsLower(), Math.log(ex.nTest() / 3.7));
+
+        System.out.printf("Clopper-Pearson check: cpUpper(0,1000,0.025)=%.5f (expect ~0.00369), cpLower(500,1000,0.025)=%.4f (expect ~0.4685)%n",
+                cpUpper(0, 1000, 0.025), cpLower(500, 1000, 0.025));
+        double[] tm = new double[100];
+        for (int i = 0; i < 100; i++) tm[i] = i;
+        System.out.printf("trimmedMean(0..99, 0.2) = %.1f (expect 49.5)%n", trimmedMean(tm, 0.2));
+        System.out.printf("percentile(0..99, 0.95) = %.2f (expect 94.05)%n", percentile(tm, 0.95));
+        System.out.printf("relError(100, 90) = %.2f (expect 0.10); relError(0, 3) = %.2f (expect 3.00); relError(100, 0) = %.2f (expect %.1f)%n",
+                relError(100, 90), relError(0, 3), relError(100, 0), ALWAYS_ZERO_REL_ERROR);
+        BoxStats bs = boxStats(new double[]{1, 2, 3, 4, 5, 6, 7, 8, 9});
+        System.out.printf("boxStats(1..9): min=%.0f q1=%.0f median=%.0f q3=%.0f max=%.0f mean=%.0f (expect 1 3 5 7 9 5)%n",
+                bs.min(), bs.q1(), bs.median(), bs.q3(), bs.max(), bs.mean());
     }
 }
