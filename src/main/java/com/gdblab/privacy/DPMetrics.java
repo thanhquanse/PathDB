@@ -162,8 +162,17 @@ public final class DPMetrics {
      */
     public record AuditResult(double epsLower, double p1, double p0, int nTest, String rule) {}
 
-    /** Distinguishing game on released scalars from world D (w1) and world D-r (w0). alpha = 0.05 -> 95%. */
+    /** Distinguishing game on released scalars from world D (w1) and world D-r (w0). alpha = 0.05 -> 95%. Both directions are tried. */
     public static AuditResult audit(final double[] w1, final double[] w0, final double alpha) {
+        return audit(w1, w0, alpha, false);
+    }
+
+    /**
+     * oneSided = true tests ONLY the direction required by one-sided DP (Doudalis et al., Definition 3.3):
+     * P[E | D] <= e^eps P[E | D'], where D contains the sensitive record (w1) and D' has it replaced (w0).
+     * The reverse direction is unbounded by design for one-sided mechanisms, so it must not be counted as a violation.
+     */
+    public static AuditResult audit(final double[] w1, final double[] w0, final double alpha, final boolean oneSided) {
         double[] v1 = half(w1, 0), t1 = half(w1, 1);
         double[] v0 = half(w0, 0), t0 = half(w0, 1);
 
@@ -181,6 +190,7 @@ public final class DPMetrics {
                 int c0 = count(v0, tau, ge);
                 for (int d = 0; d < 2; d++) {
                     boolean dir = d == 0;
+                    if (oneSided && !dir) continue;
                     int num = dir ? c1 : c0, nNum = dir ? v1.length : v0.length;
                     int den = dir ? c0 : c1, nDen = dir ? v0.length : v1.length;
                     double lo = wilsonLower(num, nNum, z);

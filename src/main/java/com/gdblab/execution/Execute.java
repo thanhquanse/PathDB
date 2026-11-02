@@ -2,6 +2,7 @@ package com.gdblab.execution;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Function;
 
 import org.antlr.v4.runtime.CharStreams;
@@ -29,6 +30,9 @@ import com.gdblab.algebra.queryplan.logical.visitor.LogicalToBFPhysicalVisitor;
 import com.gdblab.algebra.queryplan.logical.visitor.PredicatePushdownLogicalPlanVisitor;
 import com.gdblab.algebra.queryplan.physical.PhysicalOperator;
 import com.gdblab.algebra.queryplan.util.Utils;
+import com.gdblab.execution.HistogramEvaluator.Hist;
+import com.gdblab.execution.HistogramEvaluator.Ranges;
+import com.gdblab.execution.PrivacyAssessment.ValueSpec;
 import com.gdblab.graph.Graph;
 import com.gdblab.graph.schema.Edge;
 import com.gdblab.graph.schema.Node;
@@ -204,7 +208,7 @@ public final class Execute {
                     System.out.println("  /sdp-config [show|add-node-name ..|add-status k=v|add-edge-label ..|...]");
                     System.out.println("                      Inspect/edit the EDGE-focused sensitivity pattern (e.g. 'President'):");
                     System.out.println("                      an edge is sensitive if either endpoint matches, or its own label does.");
-                    System.out.println("  /sdp-execute <query>;  Run the sensitive-EDGE-pattern operator-level benchmark (gradual");
+                    System.out.println("  /sdp-truedata <query>;  Run the sensitive-EDGE-pattern operator-level benchmark (gradual");
                     System.out.println("                      per-operator summing, then selective vs uniform DP) on the loaded");
                     System.out.println("                      graph, for any query - see Evaluator.java.");
                     System.out.println();
@@ -227,15 +231,15 @@ public final class Execute {
                     System.exit(0);
 		        } else if (line.toLowerCase().startsWith("/sdp-config")) {
                     handleSdpSensitiveEdgeCommand(line.substring("/sdp-config".length()).trim());
-                } else if (line.toLowerCase().startsWith("/sdp-execute ")) {
-                    // "/sdp-execute <query>;" - runs the sensitive-EDGE-pattern
-                    // operator-level benchmark against WHATEVER graph is currently
-                    // loaded (via /load) using sdpPattern (configured via
-                    // /sdp-config), for any query PathDB supports - no file
-                    // paths here, load the dataset separately with /load first.
-                    String q = line.substring("/sdp-execute ".length()).trim();
+                } else if (line.toLowerCase().startsWith("/sdp-truedata ")) {
+                    // Hardcode patterns to test
+                    sdpPattern.addSensitiveNodeName("David");
+                    sdpPattern.addSensitiveNodeName("John");
+                    sdpPattern.addSensitiveEdgeLabel("knows");
+
+                    String q = line.substring("/sdp-truedata ".length()).trim();
                     if (q.isEmpty() || !q.endsWith(";")) {
-                        System.out.println("Usage: /sdp-execute <query>;  (load a dataset first with /load -n ... -e ...)\n");
+                        System.out.println("Usage: /sdp-truedata <query>;  (load a dataset first with /load -n ... -e ...)\n");
                     } else {
                         Function<Node, String> decade = nd -> {
                             String y = (nd.getProperties() == null) ? null : nd.getProperties().get("birthYear");
@@ -256,13 +260,80 @@ public final class Execute {
 
                             // Selected fields: the creator's birthYear (second last node; sensitive) and the message length (last node; not sensitive).
                             // Add Field("salary", new Attr("salary", 0, 200000, true), -2, true) later for a salary column.
+                            // ### Config of q14 and q17 ###
                             DataDistanceEvaluator.Config cfg = new DataDistanceEvaluator.Config()
                                     .field(new DataDistanceEvaluator.Field("birthYear", DataDistanceEvaluator.BIRTH_YEAR, -2, true))
-                                    .field(new DataDistanceEvaluator.Field("length", DataDistanceEvaluator.MESSAGE_LENGTH, -1, false))
+                                    .field(new DataDistanceEvaluator.Field("length", DataDistanceEvaluator.MESSAGE_LENGTH, -1, true))
                                     .owner(nd -> nd.getProperties() != null && sdpPattern.getSensitiveNodeNames().contains(nd.getProperties().get("name")));
 
-                            DataDistanceEvaluator.explain(q, sdpPattern, 1.0, cfg, 5, 42L);
-                            DataDistanceEvaluator.compare(q, sdpPattern, new double[]{0.5, 1.0, 2.0, 5.0}, cfg, 100, 42L);
+                            // ### Config of q15 and q16 ###
+                            DataDistanceEvaluator.Config cfgY = new DataDistanceEvaluator.Config()
+                                    .field(new DataDistanceEvaluator.Field("x.birthYear", DataDistanceEvaluator.BIRTH_YEAR, -1, true))
+                                    .owner(nd -> nd.getProperties() != null && sdpPattern.getSensitiveNodeNames().contains(nd.getProperties().get("name")));
+
+                            DataDistanceEvaluator.Config cfgXY = new DataDistanceEvaluator.Config()
+                                    .field(new DataDistanceEvaluator.Field("x.birthYear", DataDistanceEvaluator.BIRTH_YEAR, -2, true))
+                                    .field(new DataDistanceEvaluator.Field("y.birthYear", DataDistanceEvaluator.BIRTH_YEAR, -1, true))
+                                    .owner(nd -> {
+                                        Object name = nd.getProperties() == null ? null : nd.getProperties().get("name");
+                                        boolean result = name != null
+                                                && sdpPattern.getSensitiveNodeNames().contains(name);
+                                        // if (result) {
+                                        //     System.out.printf(
+                                        //         "owner check: node=%s, name=%s, sensitiveNames=%s, result=%s%n",
+                                        //         nd, name, sdpPattern.getSensitiveNodeNames(), result
+                                        //     );
+                                        // }
+
+                                        return result;
+                                    });
+                                    
+                                    // .owner(nd -> nd.getProperties() != null && sdpPattern.getSensitiveNodeNames().contains(nd.getProperties().get("name")));
+
+                            DataDistanceEvaluator.explain(q, sdpPattern, 1.0, cfgXY, 5, 42L);
+                            DataDistanceEvaluator.compare(q, sdpPattern, new double[]{0.5, 1.0, 2.0, 5.0}, cfgXY, 100, 42L);
+                        } catch (Exception e) {
+                            System.out.println(e);
+                        }
+                    }
+                } else if (line.toLowerCase().startsWith("/sdp-histogram ")) {
+                    // Hardcode patterns to test
+                    sdpPattern.addSensitiveNodeName("David");
+                    // sdpPattern.addSensitiveNodeName("John");
+                    sdpPattern.addSensitiveEdgeLabel("knows");
+
+                    String q = line.substring("/sdp-histogram ".length()).trim();
+                    if (q.isEmpty() || !q.endsWith(";")) {
+                        System.out.println("Usage: /sdp-histogram <query>;  (load a dataset first with /load -n ... -e ...)\n");
+                    } else {
+                        try {
+                            // PUBLIC ranges of the numeric properties (must not be derived from the data); add salary here later: .add("salary", 0, 200000, 10000)
+                            Ranges ranges = new Ranges().add("birthYear", 1980, 2000, 10).add("length", 0, 1000, 50);
+                            
+                            List<Hist> specs = HistogramEvaluator.specsFor(q, ranges);
+
+                            HistogramEvaluator.explain(q, sdpPattern, 1.0, specs.get(2), 8, 42L, 10);          // read this first: one draw, bin by bin
+
+                            // HistogramEvaluator.compare(q, sdpPattern, new double[]{0.1, 1.0}, specs, 100, 42L);
+
+                            // HistogramEvaluator.sweepSensitiveEdges(q, sdpPattern, new double[]{0.0, 0.01, 0.05, 0.10, 0.25, 0.50, 1.0}, 1.0, specs.get(2), 100, 42L);
+                        } catch (Exception e) {
+                            System.out.println(e);
+                        }
+                    }
+                } else if (line.toLowerCase().startsWith("/sdp-privacy ")) {
+                    // Hardcode patterns to test
+                    sdpPattern.addSensitiveNodeName("David");
+                    sdpPattern.addSensitiveNodeName("John");
+                    sdpPattern.addSensitiveEdgeLabel("knows");
+
+                    String q = line.substring("/sdp-privacy ".length()).trim();
+                    if (q.isEmpty() || !q.endsWith(";")) {
+                        System.out.println("Usage: /sdp-privacy <query>;  (load a dataset first with /load -n ... -e ...)\n");
+                    } else {
+                        try {
+                            ValueSpec birthYear = new ValueSpec("birthYear", 1980, 2000, true, nd -> nd.getProperties() != null && sdpPattern.getSensitiveNodeNames().contains(nd.getProperties().get("name")));
+                            PrivacyAssessment.run(q, sdpPattern, new double[]{0.5, 1.0, 2.0}, birthYear, 7, 20000, 42L);
                         } catch (Exception e) {
                             System.out.println(e);
                         }
